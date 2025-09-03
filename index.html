@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>Flight Logger – Diário de Bordo (v8.5)</title>
+<title>Flight Logger – Diário de Bordo (v8.6)</title>
 <meta name="theme-color" content="#111827">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -48,7 +48,7 @@ th{background:#0e1627;color:#cbd5e1}
 <body>
 <div class="wrap">
   <header>
-    <h1>Flight Logger – Diário de Bordo (v8.5)</h1>
+    <h1>Flight Logger – Diário de Bordo (v8.6)</h1>
     <div class="pill">Fuso: <span id="tzname"></span></div>
   </header>
 
@@ -61,7 +61,7 @@ th{background:#0e1627;color:#cbd5e1}
       <div><label>Copiloto</label><input id="copilot"></div>
       <div><label>POB</label><input id="pob" inputmode="numeric" placeholder="0"></div>
     </div>
-    <div class="hint" style="margin-top:6px">Cálculo de <b>Bloco (ST→SHT)</b> segue o primeiro Start após o último corte anterior e é mostrado na etapa que tem o corte.</div>
+    <div class="hint" style="margin-top:6px">Cálculo de <b>Voo</b> e <b>Bloco</b> normaliza horários em tempo real (digite 915 ⇒ 09:15), e o <b>Bloco cruzado</b> é registrado na etapa do SHT.</div>
   </div>
 
   <div class="card">
@@ -179,10 +179,21 @@ const state = {
 function addLeg(){ const last=state.legs[state.legs.length-1]; const nl={rv:state.flightNo||'',orig:last? (last.dst||''):'',dst:'',st:null,to:null,ld:null,sht:null,stS:'',toS:'',ldS:'',shtS:'',day:'',night:'',vfr:'',ifr:'',ldgCount:1,startFuel:'',finalFuel:'',mtow:false,countLanding:true}; state.legs.push(nl); state.active=state.legs.length-1; render(); }
 function removeLeg(){ if(state.legs.length>1){ state.legs.splice(state.active,1); state.active=Math.max(0,state.active-1); render(); } }
 
-function getHM(L, key){ const mapS={st:'stS',to:'toS',ld:'ldS',sht:'shtS'}; const mirror=mapS[key]; const vS=L[mirror]; if(vS && /^\\d{2}:\\d{2}$/.test(vS)) return vS; const d=L[key]; return d? fmtHM(d) : ''; }
+// NOVO: pega o HM normalizado do espelho, senão do Date
+function getHMNormalized(L, key){
+  const mapS={st:'stS',to:'toS',ld:'ldS',sht:'shtS'};
+  const mirror=L[mapS[key]];
+  if(mirror && mirror.trim()){
+    const n = normalizeHM(mirror);
+    if(n) return n; // usa em tempo real (915 -> 09:15)
+  }
+  const d=L[key];
+  return d? fmtHM(d) : '';
+}
 
+// Tempo de voo por etapa (TO→LD)
 function legAirMs(L){
-  const hmTo=getHM(L,'to'), hmLd=getHM(L,'ld');
+  const hmTo=getHMNormalized(L,'to'), hmLd=getHMNormalized(L,'ld');
   if(/^\\d{2}:\\d{2}$/.test(hmTo||'') && /^\\d{2}:\\d{2}$/.test(hmLd||'')){
     const base=currentBaseDate(); const toD=parseHM(hmTo,base), ldD=parseHM(hmLd,base);
     let ms=ldD-toD; if(ms<0) ms+=86400000; return ms;
@@ -190,18 +201,19 @@ function legAirMs(L){
   return null;
 }
 
+// Bloco cruzado (registrado na etapa do SHT)
 function legBlockMsCross(idx){
   const L = state.legs[idx];
-  const hmSht = getHM(L,'sht');
+  const hmSht = getHMNormalized(L,'sht');
   if(!/^\\d{2}:\\d{2}$/.test(hmSht||'')) return null;
   let prevShtIdx = -1;
   for(let p=idx-1;p>=0;p--){
-    const s = getHM(state.legs[p],'sht');
+    const s = getHMNormalized(state.legs[p],'sht');
     if(/^\\d{2}:\\d{2}$/.test(s||'')){ prevShtIdx = p; break; }
   }
   let startIdx = -1, startHM='';
   for(let k=prevShtIdx+1; k<=idx; k++){
-    const s = getHM(state.legs[k],'st');
+    const s = getHMNormalized(state.legs[k],'st');
     if(/^\\d{2}:\\d{2}$/.test(s||'')){ startIdx = k; startHM = s; break; }
   }
   if(startIdx===-1) return null;
@@ -227,7 +239,7 @@ function renderLegEditor(){
   const i=state.active, L=state.legs[i];
   const box=document.getElementById('legsList'); box.innerHTML='';
   const ro = state.allowEdit ? '' : 'readonly';
-  const stV = getHM(L,'st'), toV = getHM(L,'to'), ldV = getHM(L,'ld'), shtV = getHM(L,'sht');
+  const stV = getHMNormalized(L,'st'), toV = getHMNormalized(L,'to'), ldV = getHMNormalized(L,'ld'), shtV = getHMNormalized(L,'sht');
   const row=document.createElement('div'); row.className='row'; row.innerHTML = `
     <div><label>ST (seq)</label><input value="${i+1}" disabled></div>
     <div><label>RV (relatório)</label><input id="leg_rv" placeholder="RV" value="${L.rv||''}"></div>
@@ -254,7 +266,7 @@ function renderLegEditor(){
   const commitHM = (key, mirrorKey, el)=>{
     if(!state.allowEdit) return;
     const n = normalizeHM(el.value);
-    L[mirrorKey] = el.value; // keep typed
+    L[mirrorKey] = el.value;
     if(!n){ el.classList.add('invalid'); return; }
     el.classList.remove('invalid');
     const base = currentBaseDate();
@@ -269,7 +281,7 @@ function renderLegEditor(){
   };
   const wireTime = (id, key, mirrorKey)=>{
     const el = document.getElementById(id);
-    el.addEventListener('input', ()=> liveMirror(mirrorKey, el));
+    el.addEventListener('input', ()=> liveMirror(mirrorKey, el)); // agora normaliza em tempo real nos cálculos
     const handler = ()=> commitHM(key, mirrorKey, el);
     el.addEventListener('change', handler);
     el.addEventListener('blur', handler);
@@ -300,10 +312,10 @@ function renderSummary(){
   const lines=[];
   lines.push(`ST: ${i+1}  RV: ${L.rv||''}`);
   lines.push(`Rota: ${L.orig||'—'} → ${L.dst||'—'}`);
-  const stV = getHM(L,'st') || '--:--';
-  const toV = getHM(L,'to') || '--:--';
-  const ldV = getHM(L,'ld') || '--:--';
-  const shtV = getHM(L,'sht') || '--:--';
+  const stV = getHMNormalized(L,'st') || '--:--';
+  const toV = getHMNormalized(L,'to') || '--:--';
+  const ldV = getHMNormalized(L,'ld') || '--:--';
+  const shtV = getHMNormalized(L,'sht') || '--:--';
   lines.push(`ST:${stV}  TO:${toV}  LD:${ldV}  SHT:${shtV}`);
   const air = airHM(L), blk = blkHM(i);
   if(air && air!=='--:--') lines.push(`Tempo de Voo: ${air} (${hmToDec(air)} h dec)`);
@@ -324,7 +336,7 @@ function renderPDFPreview(){
   const airDec = air && air!=='--:--' ? hmToDec(air) : '';
   const pousos = L.countLanding ? (L.ldgCount||1) : 0;
   const fillExtra = (L.mtow && L.countLanding);
-  const stV = getHM(L,'st'), toV = getHM(L,'to'), ldV = getHM(L,'ld'), shtV = getHM(L,'sht');
+  const stV = getHMNormalized(L,'st'), toV = getHMNormalized(L,'to'), ldV = getHMNormalized(L,'ld'), shtV = getHMNormalized(L,'sht');
   const html = `
   <table>
     <thead><tr>
@@ -388,20 +400,20 @@ function promptFuel(label, curr){
 }
 document.getElementById("barStart").onclick = ()=>{
   const L=state.legs[state.active];
-  if(!getHM(L,'st')){ const now=new Date(); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`; L.st = now; L.stS = hh; }
+  if(!getHMNormalized(L,'st')){ const now=new Date(); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`; L.st = now; L.stS = hh; }
   L.startFuel = promptFuel('Start Fuel', L.startFuel);
   refreshComputed();
 };
 document.getElementById("barTkoff").onclick = ()=>{
   const L=state.legs[state.active];
-  if(getHM(L,'to') && getHM(L,'ld')){ addLeg(); return; }
+  if(getHMNormalized(L,'to') && getHMNormalized(L,'ld')){ addLeg(); return; }
   const now=new Date(); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
   L.to = now; L.toS = hh;
   refreshComputed();
 };
 document.getElementById("barLand").onclick = ()=>{
   const L=state.legs[state.active];
-  if(!getHM(L,'to')){ const now=new Date(new Date().getTime()-60000); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`; L.to=now; L.toS=hh; }
+  if(!getHMNormalized(L,'to')){ const now=new Date(new Date().getTime()-60000); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`; L.to=now; L.toS=hh; }
   const now=new Date(); const hh=`${pad(now.getHours())}:${pad(now.getMinutes())}`;
   L.ld = now; L.ldS = hh;
   if(L.countLanding){ L.ldgCount = Math.max(1, parseInt(L.ldgCount||'1')); }
@@ -425,14 +437,14 @@ document.getElementById("btnCSV").onclick = ()=>{
     const blkHMv = b!=null? msToHM(b):'';
     const pousos = L.countLanding ? (L.ldgCount||1) : 0;
     const fillExtra = (L.mtow && L.countLanding);
-    const stV = getHM(L,'st'), toV = getHM(L,'to'), ldV = getHM(L,'ld'), shtV = getHM(L,'sht');
+    const stV = getHMNormalized(L,'st'), toV = getHMNormalized(L,'to'), ldV = getHMNormalized(L,'ld'), shtV = getHMNormalized(L,'sht');
     return [i+1,L.rv||'',L.orig||'',L.dst||'', stV||'',toV||'',ldV||'',shtV||'',
             airHMv, blkHMv, L.ldgCount||1, L.day||'',L.night||'',L.vfr||'',L.ifr||'', L.startFuel||'',L.finalFuel||'',
             L.mtow?'Sim':'Não', L.countLanding?'Sim':'Não', fillExtra?airDec:'', fillExtra?pousos:''];
   });
   const csv = [hdr].concat(rows).map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
-  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`flight-logger-v8_5-${document.getElementById("date").value||'data'}.csv`; a.click(); URL.revokeObjectURL(url);
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`flight-logger-v8_6-${document.getElementById("date").value||'data'}.csv`; a.click(); URL.revokeObjectURL(url);
 };
 
 document.getElementById("btnExportPDF").onclick = ()=>{
@@ -456,7 +468,7 @@ document.getElementById("btnExportPDF").onclick = ()=>{
   const blkHMv = b!=null? msToHM(b):'';
   const pousos = L.countLanding ? (L.ldgCount||1) : 0;
   const fillExtra = (L.mtow && L.countLanding);
-  const stV = getHM(L,'st'), toV = getHM(L,'to'), ldV = getHM(L,'ld'), shtV = getHM(L,'sht');
+  const stV = getHMNormalized(L,'st'), toV = getHMNormalized(L,'to'), ldV = getHMNormalized(L,'ld'), shtV = getHMNormalized(L,'sht');
   const html = `
     <!doctype html><html><head><meta charset="utf-8">${style}</head><body>
       <div class="title"><h2>Diário – Linha (Etapa ${i+1})</h2><span class="pill">${new Date().toLocaleString()}</span></div>
@@ -488,7 +500,7 @@ document.getElementById("btnExportPDF").onclick = ()=>{
 };
 
 document.getElementById("btnSave").onclick = ()=>{
-  localStorage.setItem('flight-logger-v8_5', JSON.stringify({
+  localStorage.setItem('flight-logger-v8_6', JSON.stringify({
     ...state,
     legs: state.legs.map(L=>({...L,
       st: L.st?L.st.toISOString():null, to:L.to?L.toISOString():null, ld:L.ld?L.ld.toISOString():null, sht:L.sht?L.sht.toISOString():null
@@ -498,7 +510,7 @@ document.getElementById("btnSave").onclick = ()=>{
   alert('Salvo no dispositivo.');
 };
 document.getElementById("btnLoad").onclick = ()=>{
-  const raw=localStorage.getItem('flight-logger-v8_5'); if(!raw){ alert('Nada salvo.'); return; }
+  const raw=localStorage.getItem('flight-logger-v8_6'); if(!raw){ alert('Nada salvo.'); return; }
   const o=JSON.parse(raw);
   document.getElementById("date").value = o.date || todayISO;
   state.tail=o.tail||''; state.flightNo=o.flightNo||''; state.captain=o.captain||''; state.copilot=o.copilot||''; state.pob=o.pob||'';
